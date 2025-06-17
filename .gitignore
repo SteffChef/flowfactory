@@ -1,3 +1,5 @@
 .venv
 
 qdrant_storage
+
+.env
