@@ -1,252 +1,459 @@
 import streamlit as st
 from langchain_ollama import ChatOllama
-from langchain.memory import ConversationBufferMemory
 from langchain_ollama import OllamaEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain import hub
-from langgraph.prebuilt import create_react_agent
-from langgraph_supervisor import create_supervisor
-from langchain.callbacks import StreamingStdOutCallbackHandler
-from langchain_core.messages import convert_to_messages, HumanMessage, AIMessage
-from langgraph.types import interrupt
 from qdrant_client import QdrantClient
-from langchain_core.retrievers import BaseRetriever
+import json
+import os
 
 # Page configuration
-st.set_page_config(page_title="AI Usecase Evaluation", layout="centered")
+st.set_page_config(page_title="AI Usecase Evaluation in Finance", layout="centered")
 st.title("AI Usecase Evaluation in Finance")
 
 # Initialize session state
-st.session_state.setdefault("messages", [])
-st.session_state.setdefault("memory", ConversationBufferMemory(
-    memory_key="history",
-    input_key="input",
-    output_key="output",
-    return_messages=True
-))
-st.session_state.setdefault("waiting_for_human_input", False)
-st.session_state.setdefault("current_query", "")
-st.session_state.setdefault("agent_conversation", [])
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# LLM and embeddings setup
-llm = ChatOllama(model="llama3.2:latest", streaming=True)
-embeddings = OllamaEmbeddings(model="llama3.2:latest")
+# Track information request attempts  
+if "info_requests" not in st.session_state:
+    st.session_state.info_requests = 0
 
-# Connect to local Qdrant instance for knowledge base
-qdrant_client = QdrantClient("localhost:6333")
-vector_store = QdrantVectorStore(
-    client=qdrant_client,
-    collection_name="demo_collection",
-    embedding=embeddings,
-)
-retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+# Track accumulated user input to prevent forgetting
+if "accumulated_input" not in st.session_state:
+    st.session_state.accumulated_input = ""
+    
+st.session_state.setdefault("category_scores", {
+    "perceived_benefits": None,
+    "external_pressure": None, 
+    "organizational_readiness": None
+})
+st.session_state.setdefault("evaluation_details", {
+    "perceived_benefits": "",
+    "external_pressure": "",
+    "organizational_readiness": ""
+})
 
-# RAG Chain for retrieving relevant AI use cases
-rag_prompt = hub.pull("rlm/rag-prompt")
+# Constants
+MAX_INFO_REQUESTS = 2  # Maximum number of times to ask for more information
 
-def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
+# Read evaluation criteria
+evaluation_criteria_path = os.path.join(os.path.dirname(__file__), "evaluation_criteria.txt")
+with open(evaluation_criteria_path, "r") as file:
+    evaluation_criteria = file.read()
 
-rag_chain = (
-    {"context": retriever | format_docs, "question": RunnablePassthrough()}
-    | rag_prompt
-    | llm
-    | StrOutputParser()
-)
+# Extract criteria for each category
+perceived_benefits_criteria = evaluation_criteria.split("(1) Perceived Benefits")[1].split("(2) External Pressure")[0].strip()
+external_pressure_criteria = evaluation_criteria.split("(2) External Pressure")[1].strip() if "(3) Organizational Readiness" not in evaluation_criteria else evaluation_criteria.split("(2) External Pressure")[1].split("(3) Organizational Readiness")[0].strip()
+organizational_readiness_criteria = evaluation_criteria.split("(3) Organizational Readiness")[1].strip() if "(3) Organizational Readiness" in evaluation_criteria else ""
+
+# LLM setup
+llm = ChatOllama(model="llama3.2:latest", temperature=0.1, streaming=True)
+
+# Setup RAG if available
+try:
+    embeddings = OllamaEmbeddings(model="llama3.2:latest")
+    qdrant_client = QdrantClient("localhost:6333")
+    vector_store = QdrantVectorStore(
+        client=qdrant_client,
+        collection_name="demo_collection",
+        embedding=embeddings,
+    )
+    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+    rag_available = True
+except Exception as e:
+    st.warning("Knowledge base not available. Continuing without RAG capabilities.")
+    retriever = None
+    rag_available = False
 
 # Function to get relevant examples from knowledge base
-def get_relevant_examples(query: str) -> str:
-    """Retrieve relevant AI use case examples from the knowledge base."""
+def get_relevant_examples(query):
+    if not rag_available or not retriever:
+        return ""
+    
     try:
-        response = rag_chain.invoke(query)
-        return response
-    except Exception as e:
-        return f"Unable to retrieve examples: {str(e)}"
-
-# Function to collect human input when an agent requests it
-def human_assistance(query: str) -> str:
-    """Request assistance from a human."""
-    st.session_state.waiting_for_human_input = True
-    st.session_state.current_query = query
-    
-    # First try to get information from our knowledge base
-    kb_response = get_relevant_examples(query)
-    
-    # Return knowledge base response or default if not useful
-    if kb_response and len(kb_response) > 20:
-        return f"Based on our knowledge base: {kb_response}"
-    return "The information is not available at this moment. Please continue with what you know."
-
-# Tool to access the RAG system for the agents
-def search_knowledge_base(query: str) -> str:
-    """Search the knowledge base for relevant AI use case examples in finance."""
-    examples = get_relevant_examples(query)
-    return f"Knowledge base examples: {examples}"
-
-# Create the agents with access to both human assistance and knowledge base
-perceived_benefits_agent = create_react_agent(
-    model=llm,
-    tools=[human_assistance, search_knowledge_base],
-    prompt=(
-        "You are a perceived benefits agent for evaluating AI usecases in finance.\n\n"
-        "INSTRUCTIONS:\n"
-        "- Assist ONLY with evaluating AI usecases in terms of perceived benefits\n"
-        "- Focus on potential ROI, efficiency gains, accuracy improvements, and competitive advantages\n"
-        "- Use the search_knowledge_base tool to find relevant examples before asking for human help\n"
-        "- After you're done with your tasks, respond to the supervisor directly\n"
-        "- Respond ONLY with the results of your work, do NOT include ANY other text."
-    ),
-    name="perceived_benefits_agent",
-)
-
-external_pressure_agent = create_react_agent(
-    model=llm,
-    tools=[human_assistance, search_knowledge_base],
-    prompt=(
-        "You are an external pressure agent for evaluating AI usecases in finance.\n\n"
-        "INSTRUCTIONS:\n"
-        "- Assist ONLY with evaluating AI usecases in terms of external pressure\n"
-        "- Focus on regulatory requirements, competitor actions, customer expectations, and market trends\n"
-        "- Use the search_knowledge_base tool to find relevant examples before asking for human help\n"
-        "- After you're done with your tasks, respond to the supervisor directly\n"
-        "- Respond ONLY with the results of your work, do NOT include ANY other text."
-    ),
-    name="external_pressure_agent",
-)
-
-organizational_readiness_agent = create_react_agent(
-    model=llm,
-    tools=[human_assistance, search_knowledge_base],
-    prompt=(
-        "You are an organizational readiness agent for evaluating AI usecases in finance.\n\n"
-        "INSTRUCTIONS:\n"
-        "- Assist ONLY with evaluating AI usecases in terms of organizational readiness\n"
-        "- Focus on technical capabilities, data quality, staff skills, governance frameworks, and implementation feasibility\n"
-        "- Use the search_knowledge_base tool to find relevant examples before asking for human help\n"
-        "- After you're done with your tasks, respond to the supervisor directly\n"
-        "- Respond ONLY with the results of your work, do NOT include ANY other text."
-    ),
-    name="organizational_readiness_agent",
-)
-
-# Create the supervisor with access to the knowledge base
-supervisor = create_supervisor(
-    model=llm,
-    agents=[perceived_benefits_agent, external_pressure_agent, organizational_readiness_agent],
-    tools=[search_knowledge_base],
-    prompt=(
-        "You are a supervisor managing three agents for evaluating AI use cases in finance:\n"
-        "- perceived_benefits_agent: Assign tasks to this agent regarding perceived benefits of AI use cases.\n"
-        "- external_pressure_agent: Assign tasks to this agent regarding external pressures on AI use cases.\n"
-        "- organizational_readiness_agent: Assign tasks to this agent regarding organizational readiness for AI use cases.\n\n"
-        "Before assigning tasks, use the search_knowledge_base tool to gather relevant examples.\n"
-        "Assign work to one agent at a time, do not call agents in parallel.\n"
-        "Do not do any work yourself.\n"
-        "When responding to the user, synthesize all findings from the agents into a comprehensive assessment."
-    ),
-    add_handoff_back_messages=True,
-    output_mode="full_history",
-).compile()
-
-# Function to collect agent responses
-class ConversationCollector(StreamingStdOutCallbackHandler):
-    def __init__(self):
-        super().__init__()
-        self.conversation = []
-    
-    def on_llm_new_token(self, token: str, **kwargs):
-        self.conversation.append(token)
+        rag_prompt = hub.pull("rlm/rag-prompt")
         
-    def get_conversation(self):
-        return "".join(self.conversation)
+        def format_docs(docs):
+            return "\n\n".join(doc.page_content for doc in docs)
+        
+        rag_chain = (
+            {"context": retriever | format_docs, "question": RunnablePassthrough()}
+            | rag_prompt
+            | llm
+            | StrOutputParser()
+        )
+        return rag_chain.invoke(query)
+    except:
+        return ""
+
+# Function to safely extract JSON from text
+def extract_json_from_text(text):
+    if not text:
+        return None
+    try:
+        # Find JSON content between curly braces
+        start_idx = text.find('{')
+        end_idx = text.rfind('}') + 1
+        if start_idx >= 0 and end_idx > start_idx:
+            json_str = text[start_idx:end_idx]
+            return json.loads(json_str)
+        return None
+    except:
+        return None
+
+# Function to evaluate a single category
+def evaluate_category(category, criteria, prompt, examples=""):
+    try:
+        # Prepare evaluation prompt
+        evaluation_prompt = f"""
+        You are an AI expert evaluating {category} of an AI use case in finance.
+        
+        EVALUATION CRITERIA:
+        {criteria}
+        
+        RELEVANT EXAMPLES AND KNOWLEDGE:
+        {examples}
+        
+        USER QUERY:
+        {prompt}
+        
+        Please provide a comprehensive evaluation of this AI use case focusing on {category}.
+        
+        Score this category from 1-100 based on the following scale:
+        - 1-20: Very poor/High risk
+        - 21-40: Poor/Significant concerns
+        - 41-60: Average/Moderate potential
+        - 61-80: Good/Strong potential
+        - 81-100: Excellent/Exceptional potential
+        
+        Respond with a JSON object with the following structure:
+        {{
+            "score": <1-100>,
+            "evaluation": "<detailed explanation of your assessment>",
+            "key_strengths": ["<strength1>", "<strength2>", ...],
+            "key_weaknesses": ["<weakness1>", "<weakness2>", ...],
+            "recommendations": ["<recommendation1>", "<recommendation2>", ...]
+        }}
+        
+        Make sure the JSON is properly formatted with no errors.
+        """
+        
+        # Get evaluation
+        response = llm.invoke(evaluation_prompt)
+        content = response.content if hasattr(response, 'content') else str(response)
+        
+        # Extract JSON
+        result = extract_json_from_text(content)
+        if result and "score" in result:
+            return result
+        
+        # If extraction failed, try a simplified retry
+        retry_prompt = f"""
+        Please evaluate the {category} of the following AI use case in finance:
+        "{prompt}"
+        
+        Respond with a simple JSON:
+        {{
+            "score": <number between 1-100>,
+            "evaluation": "<brief assessment>",
+            "key_strengths": ["<strength1>"],
+            "key_weaknesses": ["<weakness1>"],
+            "recommendations": ["<recommendation1>"]
+        }}
+        """
+        response = llm.invoke(retry_prompt)
+        content = response.content if hasattr(response, 'content') else str(response)
+        result = extract_json_from_text(content)
+        
+        if result and "score" in result:
+            return result
+            
+        # Last resort - create a simple result
+        return {
+            "score": 50,
+            "evaluation": f"Unable to generate a complete assessment for {category}.",
+            "key_strengths": ["Not determined"],
+            "key_weaknesses": ["Not determined"],
+            "recommendations": ["Provide more specific information"]
+        }
+    except Exception as e:
+        st.error(f"Error evaluating {category}: {str(e)}")
+        return {
+            "score": 50,
+            "evaluation": f"Error during evaluation of {category}.",
+            "key_strengths": ["Not determined"],
+            "key_weaknesses": ["Not determined"],
+            "recommendations": ["Provide more specific information"]
+        }
+
+# Function to check if we have enough information
+def check_information_sufficiency(prompt):
+    # If we've already asked for more information twice, proceed anyway
+    if st.session_state.info_requests >= MAX_INFO_REQUESTS:
+        return {"is_sufficient": True, "missing_information": [], "feedback": "Proceeding with evaluation based on available information."}
+    
+    try:
+        check_prompt = f"""
+        You're evaluating whether there's sufficient information about an AI use case in finance.
+        
+        USER QUERY: {prompt}
+        
+        Is there enough information to assess:
+        1. Perceived Benefits (value proposition, efficiency gains, etc.)
+        2. External Pressure (regulatory, market forces, etc.)
+        3. Organizational Readiness (technical capabilities, skills, etc.)
+        
+        Be lenient in your assessment. If there's basic information about the AI use case, consider it sufficient.
+        
+        Respond true/false and explain why: {{
+            "is_sufficient": true/false,
+            "missing_information": ["specific missing info"],
+            "feedback": "brief explanation"
+        }}
+        """
+        
+        response = llm.invoke(check_prompt)
+        content = response.content if hasattr(response, 'content') else str(response)
+        result = extract_json_from_text(content)
+        
+        if result and "is_sufficient" in result:
+            return result
+        return {"is_sufficient": True, "missing_information": [], "feedback": ""}
+    except:
+        # On error, proceed with evaluation
+        return {"is_sufficient": True, "missing_information": [], "feedback": ""}
 
 # Display chat history
 for m in st.session_state.messages:
     st.chat_message(m["role"]).markdown(m["content"])
 
-# Display human assistance prompt if needed
-if st.session_state.waiting_for_human_input:
-    with st.container():
-        st.info(f"Agent needs information: {st.session_state.current_query}")
-        human_response = st.text_input("Your response to the agent:", key="human_assist_input")
-        if st.button("Submit Response"):
-            st.session_state.waiting_for_human_input = False
-            # In a real implementation, we'd need to feed this back to the agent
-            # This is a placeholder for now
-
-# Handle new user input
-if prompt := st.chat_input("Ask about AI use cases in finance..."):
+# Handle user input
+if prompt := st.chat_input("Describe an AI use case in finance for evaluation..."):
     # Display user message
     st.chat_message("user").markdown(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
     
-    # Process with the agent system
+    # Accumulate user input
+    if st.session_state.accumulated_input:
+        st.session_state.accumulated_input += f"\n\nAdditional information: {prompt}"
+    else:
+        st.session_state.accumulated_input = prompt
+    
+    # Process with evaluation system
     with st.chat_message("assistant"):
-        collector = ConversationCollector()
-        callbacks = [collector]
+        # Use accumulated input for better context retention
+        full_input = st.session_state.accumulated_input
         
-        # First get relevant information from the knowledge base
-        with st.spinner("Retrieving relevant examples..."):
-            kb_examples = get_relevant_examples(prompt)
+        # Check if enough information
+        with st.spinner("Analyzing your request..."):
+            sufficiency = check_information_sufficiency(full_input)
             
-        with st.spinner("Agents are evaluating your use case..."):
-            # Run the supervisor without callbacks parameter
-            for chunk in supervisor.stream(
-                {
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": f"Relevant examples from the knowledge base: {kb_examples}"
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt,
-                        }
-                    ]
-                }
-            ):
-                # This would update the conversation in real-time if supported
-                pass
+        if not sufficiency.get("is_sufficient", True) and st.session_state.info_requests < MAX_INFO_REQUESTS:
+            # Increment the information request counter
+            st.session_state.info_requests += 1
             
-            # Extract the final response from the supervisor
-            if "supervisor" in chunk:
-                messages = chunk["supervisor"]["messages"]
-                # Get the last assistant message
-                response = "No response generated"
-                for msg in reversed(messages):
-                    # Use proper attribute access for Message objects
-                    if hasattr(msg, 'type') and msg.type == 'ai':
-                        response = msg.content
-                        break
-                    # For dictionary messages
-                    elif isinstance(msg, dict) and msg.get("role") == "assistant":
-                        response = msg.get("content", "No response generated")
-                        break
+            # Extract missing information
+            missing_items = sufficiency.get("missing_information", [
+                "Specific AI technology being used",
+                "Financial use case details",
+                "Organizational context and capabilities"
+            ])
+            
+            # Format as bullet points with proper spacing
+            missing_info = ""
+            for item in missing_items:
+                missing_info += f"- {item}\n"
+            
+            # Create a cleaner, more direct response
+            response = f"**More Information Needed ({st.session_state.info_requests}/{MAX_INFO_REQUESTS})**\n\nTo evaluate your AI use case, I need these details:\n\n{missing_info}\n{sufficiency.get('feedback', '')}"
+            
+            # Display immediately
+            st.markdown(response)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+            
+            # Add suggestion for what to include
+            st.info("Try including details about the AI technology, specific use case, expected benefits, and organizational context.")
+            
+        else:
+            # Reset info request counter for next evaluation
+            st.session_state.info_requests = 0
+            
+            # Get knowledge base examples if available
+            kb_examples = ""
+            if rag_available:
+                with st.spinner("Retrieving relevant examples..."):
+                    kb_examples = get_relevant_examples(full_input)
+            
+            # Reset scores
+            st.session_state.category_scores = {
+                "perceived_benefits": None,
+                "external_pressure": None, 
+                "organizational_readiness": None
+            }
+            
+            st.session_state.evaluation_details = {
+                "perceived_benefits": "",
+                "external_pressure": "",
+                "organizational_readiness": ""
+            }
+            
+            # Evaluate each category
+            with st.spinner("Evaluating perceived benefits..."):
+                pb_result = evaluate_category("perceived benefits", perceived_benefits_criteria, full_input, kb_examples)
+                st.session_state.category_scores["perceived_benefits"] = pb_result["score"]
+                st.session_state.evaluation_details["perceived_benefits"] = pb_result["evaluation"]
+            
+            with st.spinner("Evaluating external pressure..."):
+                ep_result = evaluate_category("external pressure", external_pressure_criteria, full_input, kb_examples)
+                st.session_state.category_scores["external_pressure"] = ep_result["score"]
+                st.session_state.evaluation_details["external_pressure"] = ep_result["evaluation"]
+            
+            with st.spinner("Evaluating organizational readiness..."):
+                or_result = evaluate_category("organizational readiness", organizational_readiness_criteria, full_input, kb_examples)
+                st.session_state.category_scores["organizational_readiness"] = or_result["score"]
+                st.session_state.evaluation_details["organizational_readiness"] = or_result["evaluation"]
+            
+            # Calculate total score
+            scores = st.session_state.category_scores
+            total_score = (
+                scores["perceived_benefits"] * 0.35 + 
+                scores["external_pressure"] * 0.35 + 
+                scores["organizational_readiness"] * 0.3
+            )
+            
+            # Determine interpretation
+            if total_score <= 20:
+                interpretation = "Not feasible for implementation"
+            elif total_score <= 40:
+                interpretation = "High risk, substantial improvements needed"
+            elif total_score <= 60:
+                interpretation = "Moderate potential, specific improvements required"
+            elif total_score <= 80:
+                interpretation = "Good potential, minor improvements suggested"
             else:
-                response = "The agents couldn't process your request."
+                interpretation = "Excellent potential, ready for implementation"
+            
+            # Create strengths, weaknesses and recommendations sections
+            strengths = []
+            if pb_result.get("key_strengths"):
+                strengths.extend([f"- {s}" for s in pb_result.get("key_strengths", [])[:2]])
+            if ep_result.get("key_strengths"):
+                strengths.extend([f"- {s}" for s in ep_result.get("key_strengths", [])[:2]])
+            if or_result.get("key_strengths"):
+                strengths.extend([f"- {s}" for s in or_result.get("key_strengths", [])[:2]])
+
+            weaknesses = []
+            if pb_result.get("key_weaknesses"):
+                weaknesses.extend([f"- {s}" for s in pb_result.get("key_weaknesses", [])[:2]])
+            if ep_result.get("key_weaknesses"):
+                weaknesses.extend([f"- {s}" for s in ep_result.get("key_weaknesses", [])[:2]])
+            if or_result.get("key_weaknesses"):
+                weaknesses.extend([f"- {s}" for s in or_result.get("key_weaknesses", [])[:2]])
+
+            recommendations = []
+            if pb_result.get("recommendations"):
+                recommendations.extend([f"- {s}" for s in pb_result.get("recommendations", [])[:2]])
+            if ep_result.get("recommendations"):
+                recommendations.extend([f"- {s}" for s in ep_result.get("recommendations", [])[:2]])
+            if or_result.get("recommendations"):
+                recommendations.extend([f"- {s}" for s in or_result.get("recommendations", [])[:2]])
+
+            # Create summary using properly formatted lists
+            response = f"# AI Use Case Evaluation Summary\n\n"
+            response += f"## Executive Summary\n\n"
+            response += f"I've evaluated your AI use case based on three key dimensions. "
+            response += f"The overall score is **{total_score:.1f}/100** ({interpretation}).\n\n"
+
+            response += f"## Category Scores\n\n"
+            response += f"- **Perceived Benefits**: {scores['perceived_benefits']}/100\n"
+            response += f"- **External Pressure**: {scores['external_pressure']}/100\n" 
+            response += f"- **Organizational Readiness**: {scores['organizational_readiness']}/100\n\n"
+
+            if strengths:
+                response += "## Key Strengths\n\n"
+                response += "\n".join(strengths) + "\n\n"
+
+            if weaknesses:
+                response += "## Key Weaknesses\n\n"
+                response += "\n".join(weaknesses) + "\n\n"
+
+            if recommendations:
+                response += "## Recommendations\n\n"
+                response += "\n".join(recommendations)
             
             # Display the response
             st.markdown(response)
             
+            # Display score visualization
+            st.subheader("Evaluation Scores")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Perceived Benefits", scores["perceived_benefits"])
+                with st.expander("Details"):
+                    st.write(st.session_state.evaluation_details["perceived_benefits"])
+            
+            with col2:
+                st.metric("External Pressure", scores["external_pressure"])
+                with st.expander("Details"):
+                    st.write(st.session_state.evaluation_details["external_pressure"])
+            
+            with col3:
+                st.metric("Organizational Readiness", scores["organizational_readiness"])
+                with st.expander("Details"):
+                    st.write(st.session_state.evaluation_details["organizational_readiness"])
+            
+            st.metric("Total Score", f"{total_score:.1f}/100")
+            
             # Save to history
             st.session_state.messages.append({"role": "assistant", "content": response})
-            st.session_state.memory.save_context({"input": prompt}, {"output": response})
+            
+            # Reset accumulated input after successful evaluation
+            st.session_state.accumulated_input = ""
 
-# Add a section to explain how the app works
-with st.expander("How this works"):
+# Add explanation of the framework
+with st.expander("About the Evaluation Framework"):
     st.markdown("""
-    This AI use case evaluation system combines retrieval-augmented generation (RAG) with a multi-agent architecture:
+    ### AI Use Case Evaluation Framework
+
+    This application evaluates AI use cases in finance across three key dimensions:
+
+    **1. Perceived Benefits (35%)**
+    - Cost reductions and efficiency gains
+    - Revenue growth potential
+    - Customer experience improvements
+    - Strategic alignment with business goals
+
+    **2. External Pressure (35%)**
+    - Regulatory and compliance requirements
+    - Model explainability and transparency
+    - Risk management and audit capabilities
+    - Data privacy and market factors
+
+    **3. Organizational Readiness (30%)**
+    - Data quality and availability
+    - Workforce expertise and capabilities
+    - IT infrastructure and integration
+    - Organizational culture and change readiness
     
-    1. **Knowledge Base**: The system first searches a curated database of AI use cases in finance to find relevant examples.
-    
-    2. **Specialized Agents**:
-       - **Perceived Benefits Agent**: Evaluates potential advantages of implementing AI solutions
-       - **External Pressure Agent**: Assesses market forces, regulations, and competitive factors
-       - **Organizational Readiness Agent**: Analyzes your organization's capability to implement AI
-    
-    3. **Supervisor**: Coordinates the agents and synthesizes their findings into a comprehensive assessment.
-    
-    This approach ensures you get a thorough evaluation based on both established examples and expert analysis.
+    The evaluations are transparent in their reasoning and scoring methodology to provide an explainable assessment.
     """)
+
+# Add a button to reset evaluation
+if st.button("Start New Evaluation"):
+    st.session_state.info_requests = 0
+    st.session_state.accumulated_input = ""
+    st.session_state.category_scores = {
+        "perceived_benefits": None,
+        "external_pressure": None, 
+        "organizational_readiness": None
+    }
+    st.session_state.evaluation_details = {
+        "perceived_benefits": "",
+        "external_pressure": "",
+        "organizational_readiness": ""
+    }
+    st.rerun()
