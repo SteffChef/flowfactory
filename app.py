@@ -1,5 +1,5 @@
 import streamlit as st
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.memory import ConversationBufferMemory
 from langchain_ollama import OllamaEmbeddings
 from langchain_qdrant import QdrantVectorStore
@@ -13,6 +13,7 @@ from langchain_core.messages import convert_to_messages, HumanMessage, AIMessage
 from langgraph.types import interrupt
 from qdrant_client import QdrantClient
 from langchain_core.retrievers import BaseRetriever
+import os
 
 # Page configuration
 st.set_page_config(page_title="AI Usecase Evaluation", layout="centered")
@@ -31,15 +32,19 @@ st.session_state.setdefault("current_query", "")
 st.session_state.setdefault("agent_conversation", [])
 
 # LLM and embeddings setup
-llm = ChatOllama(model="llama3.2:latest", streaming=True)
-embeddings = OllamaEmbeddings(model="llama3.2:latest")
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    streaming=True,
+    temperature=0.1
+)
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
 # Connect to local Qdrant instance for knowledge base
 qdrant_client = QdrantClient("localhost:6333")
 vector_store = QdrantVectorStore(
     client=qdrant_client,
     collection_name="demo_collection",
-    embedding=embeddings,
+    embedding=embeddings
 )
 retriever = vector_store.as_retriever(search_kwargs={"k": 5})
 
