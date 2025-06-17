@@ -13,6 +13,11 @@ from langchain_core.messages import convert_to_messages, HumanMessage, AIMessage
 from langgraph.types import interrupt
 from qdrant_client import QdrantClient
 from langchain_core.retrievers import BaseRetriever
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+env = os.environ
 
 # Page configuration
 st.set_page_config(page_title="AI Usecase Evaluation", layout="centered")
@@ -35,7 +40,21 @@ llm = ChatOllama(model="llama3.2:latest", streaming=True)
 embeddings = OllamaEmbeddings(model="llama3.2:latest")
 
 # Connect to local Qdrant instance for knowledge base
-qdrant_client = QdrantClient("localhost:6333")
+# Get API key from environment
+qdrant_api_key = env.get("QDRANT_API_KEY")
+if not qdrant_api_key:
+    raise ValueError("QDRANT_API_KEY not found in environment variables")
+qdrant_url = env.get("QDRANT_URL")
+if not qdrant_url:
+    raise ValueError("QDRANT_URL not found in environment variables")
+
+
+qdrant_client = QdrantClient(
+    url=qdrant_url, 
+    api_key=qdrant_api_key,
+    check_compatibility=False,  # Skip compatibility check
+    timeout=60  # Increase timeout
+)
 vector_store = QdrantVectorStore(
     client=qdrant_client,
     collection_name="demo_collection",
