@@ -15,13 +15,20 @@ from qdrant_client import QdrantClient
 from langchain_core.retrievers import BaseRetriever
 from dotenv import load_dotenv
 import os
+from langchain_openai import ChatOpenAI  # Changed from langchain_ollama
+from langchain_openai import OpenAIEmbeddings
 
 load_dotenv()
 env = os.environ
 
 # Page configuration
 st.set_page_config(page_title="AI Usecase Evaluation", layout="centered")
-st.title("AI Usecase Evaluation in Finance")
+
+col1, col2 = st.columns([1, 4])
+with col1:
+    st.image("assets/logo.png", width=100)  # Adjust path and width as needed
+with col2:
+    st.title("AI Usecase Evaluation")
 
 # Initialize session state
 st.session_state.setdefault("messages", [])
@@ -36,8 +43,27 @@ st.session_state.setdefault("current_query", "")
 st.session_state.setdefault("agent_conversation", [])
 
 # LLM and embeddings setup
-llm = ChatOllama(model="llama3.2:latest", streaming=True)
+# llm = ChatOllama(model="llama3.2:latest", streaming=True)
 embeddings = OllamaEmbeddings(model="llama3.2:latest")
+
+model_access_key = env.get("MODEL_ACCESS_KEY")
+if not model_access_key:
+    raise ValueError("MODEL_ACCESS_KEY not found in environment variables")
+
+# Replace Ollama with Digital Ocean Serverless Inference
+llm = ChatOpenAI(
+    model="llama3.3-70b-instruct",
+    openai_api_key=model_access_key,
+    openai_api_base="https://inference.do-ai.run/v1",
+    streaming=True
+)
+
+# # Replace Ollama embeddings with Digital Ocean embeddings
+# embeddings = OpenAIEmbeddings(
+#     model="llama3.3-70b-instruct",  # Use the appropriate embedding model name
+#     openai_api_key=model_access_key,
+#     openai_api_base="https://inference.do-ai.run/v1"
+# )
 
 # Connect to local Qdrant instance for knowledge base
 # Get API key from environment
@@ -57,7 +83,7 @@ qdrant_client = QdrantClient(
 )
 vector_store = QdrantVectorStore(
     client=qdrant_client,
-    collection_name="demo_collection",
+    collection_name="banking_ai_usecases",
     embedding=embeddings,
 )
 retriever = vector_store.as_retriever(search_kwargs={"k": 5})

@@ -19,7 +19,8 @@ if not qdrant_url:
     raise ValueError("QDRANT_URL not found in environment variables")
 
 # Initialize embeddings and client
-embeddings = OllamaEmbeddings(model="llama3.2:latest")
+# embeddings = OllamaEmbeddings(model="llama3.2:latest")
+embeddings = OllamaEmbeddings(model="rjmalagon/gte-qwen2-1.5b-instruct-embed-f16")
 client = QdrantClient(
     url=qdrant_url, 
     api_key=qdrant_api_key,
@@ -28,7 +29,7 @@ client = QdrantClient(
 )
 
 # Create collection if it doesn't exist
-collection_name = "banking_ai_usecases"
+collection_name = "banking_ai_usecases_small"
 
 try:
     # Test connection first
@@ -39,7 +40,7 @@ try:
         print(f"Creating collection '{collection_name}'...")
         client.create_collection(
             collection_name=collection_name,
-            vectors_config=VectorParams(size=3072, distance=Distance.COSINE),
+            vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
         )
     else:
         print(f"Collection '{collection_name}' already exists.")
