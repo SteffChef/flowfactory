@@ -1,4 +1,5 @@
 import re
+import csv
 from langchain_qdrant import QdrantVectorStore
 from langchain_ollama import OllamaEmbeddings
 from qdrant_client import QdrantClient
@@ -19,8 +20,8 @@ if not qdrant_url:
     raise ValueError("QDRANT_URL not found in environment variables")
 
 # Initialize embeddings and client
-# embeddings = OllamaEmbeddings(model="llama3.2:latest")
-embeddings = OllamaEmbeddings(model="rjmalagon/gte-qwen2-1.5b-instruct-embed-f16")
+# embeddings = OllamaEmbeddings(model="rjmalagon/gte-qwen2-1.5b-instruct-embed-f16")
+embeddings = OllamaEmbeddings(model="llama3.2:latest")
 client = QdrantClient(
     url=qdrant_url, 
     api_key=qdrant_api_key,
@@ -29,7 +30,8 @@ client = QdrantClient(
 )
 
 # Create collection if it doesn't exist
-collection_name = "banking_ai_usecases_small"
+# collection_name = "banking_ai_usecases_small"
+collection_name = "banking_ai_usecases"
 
 try:
     # Test connection first
@@ -40,7 +42,8 @@ try:
         print(f"Creating collection '{collection_name}'...")
         client.create_collection(
             collection_name=collection_name,
-            vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+            # vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+            vectors_config=VectorParams(size=3072, distance=Distance.COSINE),
         )
     else:
         print(f"Collection '{collection_name}' already exists.")
@@ -52,31 +55,50 @@ try:
         embedding=embeddings,
     )
 
-    # Read case studies from file
-    with open('case_studies.txt', 'r') as file:
-        text = file.read()
-    
-    # Use regex to split the text into case studies
-    case_studies = re.split(r'\n\s*\n(?=Case Study \d+:)', text)
-    
-    # Process each case study into a Document
+    # Read case studies from TSV file
     documents = []
-    for i, study in enumerate(case_studies):
-        if study.strip():
-            # Remove "Case Study N:" prefix
-            cleaned_study = re.sub(r'^Case Study \d+:\s*', '', study.strip())
+    with open('FlowFactory_Case Study Database.tsv', 'r', encoding='utf-8') as file:
+        # Skip the first line which contains "// filepath:" comment
+        next(file)
+        
+        # Use csv reader with tab delimiter
+        reader = csv.reader(file, delimiter='\t')
+        
+        # Get headers from the first row
+        headers = next(reader)
+        
+        # Process each row in the TSV file
+        for i, row in enumerate(reader):
+            if not row or all(cell.strip() == '' for cell in row):
+                continue  # Skip empty rows
+                
+            # Extract data from each column
+            case_study_title = row[0] if len(row) > 0 else ""
+            challenge = row[1] if len(row) > 1 else ""
+            solution = row[2] if len(row) > 2 else ""
+            overall_impact = row[3] if len(row) > 3 else ""
+            key_learnings = row[4] if len(row) > 4 else ""
+            future_prospects = row[5] if len(row) > 5 else ""
             
-            # Extract the bank name and use case title for metadata
-            title_match = re.search(r'^([^:]+):', cleaned_study)
+            # Combine all data into a comprehensive document
+            content = f"{case_study_title}\n\nChallenge:\n{challenge}\n\n" \
+                      f"Solution:\n{solution}\n\n" \
+                      f"Overall Impact:\n{overall_impact}\n\n" \
+                      f"Key Learnings:\n{key_learnings}\n\n" \
+                      f"Future Prospects:\n{future_prospects}"
+            
+            # Create a title from case study title
+            title_match = re.search(r'^Case Study \d+: (.*)', case_study_title)
             title = title_match.group(1).strip() if title_match else f"Banking Use Case {i+1}"
             
             # Create a Document with metadata
             doc = Document(
-                page_content=cleaned_study,
+                page_content=content,
                 metadata={
                     "source": "banking_ai_usecases",
                     "title": title,
-                    "index": i
+                    "index": i,
+                    "case_study": case_study_title
                 }
             )
             documents.append(doc)
@@ -90,7 +112,7 @@ try:
         print("No case studies found in the file.")
 
 except FileNotFoundError:
-    print("Error: case_studies.txt file not found. Please make sure the file exists in the current directory.")
+    print("Error: FlowFactory_Case Study Database.tsv file not found. Please make sure the file exists in the current directory.")
 except Exception as e:
     print(f"An error occurred: {str(e)}")
     import traceback
