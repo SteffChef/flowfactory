@@ -29,6 +29,7 @@ st.session_state.setdefault("category_info", {
 })
 st.session_state.setdefault("use_case_overview", "")
 st.session_state.setdefault("evaluation_complete", False)
+st.session_state.setdefault("category_evaluations", {})
 
 CATEGORY_NAMES = {
     1: "perceived_benefits",
@@ -145,6 +146,106 @@ def ask_for_category_info(category_name):
     return questions.get(category_name, "Please provide more information.")
 
 
+def evaluate_perceived_benefits(collected_info):
+    """Evaluate the perceived benefits category and return structured assessment"""
+    
+    # Get relevant examples for context
+    kb_examples = get_relevant_examples(f"perceived benefits AI use case finance {collected_info}")
+    
+    evaluation_prompt = f"""
+    You are evaluating the PERCEIVED BENEFITS of an AI use case in finance.
+    
+    CONTEXT AND EXAMPLES:
+    {kb_examples}
+    
+    COLLECTED INFORMATION:
+    {collected_info}
+    
+    Provide a structured evaluation of perceived benefits covering:
+    1. **Cost Reduction Analysis** (quantify savings potential)
+    2. **Revenue Impact Assessment** (growth opportunities)
+    3. **Customer Experience Improvements** (service enhancements)
+    4. **Strategic Alignment** (business goal alignment)
+    5. **Competitive Advantage** (market positioning)
+    6. **Benefits Score** (1-100 based on strength of benefits)
+    
+    Return your analysis in clear markdown format.
+    """
+    
+    try:
+        response = llm.invoke(evaluation_prompt)
+        return response.content
+    except Exception as e:
+        return f"Unable to evaluate perceived benefits: {str(e)}"
+
+
+def evaluate_external_pressure(collected_info):
+    """Evaluate the external pressure category and return structured assessment"""
+    
+    # Get relevant examples for context
+    kb_examples = get_relevant_examples(f"external pressure regulatory compliance AI finance {collected_info}")
+    
+    evaluation_prompt = f"""
+    You are evaluating the EXTERNAL PRESSURE factors of an AI use case in finance.
+    
+    CONTEXT AND EXAMPLES:
+    {kb_examples}
+    
+    COLLECTED INFORMATION:
+    {collected_info}
+    
+    Provide a structured evaluation of external pressures covering:
+    1. **Regulatory Compliance** (mandatory requirements)
+    2. **Competitive Pressure** (market forces)
+    3. **Customer Demands** (service expectations)
+    4. **Risk Management** (mitigation needs)
+    5. **Industry Standards** (best practices)
+    6. **Pressure Score** (1-100 based on urgency and impact)
+    
+    Return your analysis in clear markdown format.
+    """
+    
+    try:
+        response = llm.invoke(evaluation_prompt)
+        return response.content
+    except Exception as e:
+        return f"Unable to evaluate external pressure: {str(e)}"
+
+
+def evaluate_organizational_readiness(collected_info):
+    """Evaluate the organizational readiness category and return structured assessment"""
+    
+    # Get relevant examples for context
+    kb_examples = get_relevant_examples(f"organizational readiness AI implementation finance {collected_info}")
+    
+    evaluation_prompt = f"""
+    You are evaluating the ORGANIZATIONAL READINESS for an AI use case in finance.
+    
+    CONTEXT AND EXAMPLES:
+    {kb_examples}
+    
+    COLLECTED INFORMATION:
+    {collected_info}
+    
+    Provide a structured evaluation of organizational readiness covering:
+    1. **Data Quality & Availability** (data infrastructure)
+    2. **Team Skills & Expertise** (human resources)
+    3. **IT Infrastructure** (technical capabilities)
+    4. **Change Management** (adoption readiness)
+    5. **Budget & Resources** (financial commitment)
+    6. **Readiness Score** (1-100 based on implementation feasibility)
+    
+    Return your analysis in clear markdown format.
+    """
+    
+    try:
+        response = llm.invoke(evaluation_prompt)
+        return response.content
+    except Exception as e:
+        return f"Unable to evaluate organizational readiness: {str(e)}"
+
+
+
 def process_perceived_benefits_input(user_input):
     """Process input for perceived benefits category"""
     st.session_state.category_info["perceived_benefits"] += f" {user_input}"
@@ -154,6 +255,10 @@ def process_perceived_benefits_input(user_input):
     )
     
     if sufficiency["is_sufficient"]:
+        # Evaluate this category and store the result
+        evaluation = evaluate_perceived_benefits(st.session_state.category_info["perceived_benefits"])
+        st.session_state.category_evaluations["perceived_benefits"] = evaluation
+        
         st.session_state.current_category = 2
         return ask_for_category_info("external_pressure")
     else:
@@ -169,6 +274,10 @@ def process_external_pressure_input(user_input):
     )
     
     if sufficiency["is_sufficient"]:
+        # Evaluate this category and store the result
+        evaluation = evaluate_external_pressure(st.session_state.category_info["external_pressure"])
+        st.session_state.category_evaluations["external_pressure"] = evaluation
+        
         st.session_state.current_category = 3
         return ask_for_category_info("organizational_readiness")
     else:
@@ -184,12 +293,15 @@ def process_organizational_readiness_input(user_input):
     )
     
     if sufficiency["is_sufficient"]:
+        # Evaluate this category and store the result
+        evaluation = evaluate_organizational_readiness(st.session_state.category_info["organizational_readiness"])
+        st.session_state.category_evaluations["organizational_readiness"] = evaluation
+        
         st.session_state.current_category = 4
         return perform_final_evaluation()
     else:
         missing = ', '.join(sufficiency['missing_aspects'])
         return f"I need more information about **Organizational Readiness**.\n\n**Missing:** {missing}\n\n{sufficiency['follow_up_question']}"
-
 
 # TODO: Define required information for each category
 def check_perceived_benefits_sufficiency(collected_info):
@@ -266,41 +378,51 @@ def check_organizational_readiness_sufficiency(collected_info):
 
 # TODO: evaluate each category when switching to the next and store it for final evaluation
 def perform_final_evaluation():
-    """Perform the final evaluation when all information is collected"""
+    """Perform the final evaluation using all category evaluations"""
     
-    # Collect all information
+    # Get all category evaluations
+    category_evaluations = st.session_state.get("category_evaluations", {})
+    
+    # Collect all information for context
     full_context = f"""
     Use Case Overview: {st.session_state.use_case_overview}
     
-    Perceived Benefits Information: {st.session_state.category_info['perceived_benefits']}
+    CATEGORY EVALUATIONS:
     
-    External Pressure Information: {st.session_state.category_info['external_pressure']}
+    Perceived Benefits Evaluation:
+    {category_evaluations.get('perceived_benefits', 'Not evaluated')}
     
-    Organizational Readiness Information: {st.session_state.category_info['organizational_readiness']}
+    External Pressure Evaluation:
+    {category_evaluations.get('external_pressure', 'Not evaluated')}
+    
+    Organizational Readiness Evaluation:
+    {category_evaluations.get('organizational_readiness', 'Not evaluated')}
     """
     
     # Get relevant examples from knowledge base
     kb_examples = get_relevant_examples(st.session_state.use_case_overview)
 
-    # Create evaluation prompt
+    # Create final evaluation prompt
     evaluation_prompt = f"""
-    You are an AI expert providing a comprehensive evaluation of an AI use case in finance.
+    You are an AI expert providing a FINAL COMPREHENSIVE evaluation of an AI use case in finance.
     
     CONTEXT AND EXAMPLES:
     {kb_examples}
     
-    COLLECTED INFORMATION:
+    DETAILED ANALYSIS FROM CATEGORIES:
     {full_context}
     
-    Provide a structured evaluation covering:
-    1. **Overall Assessment** (1-100 score)
-    2. **Perceived Benefits Analysis** (strengths and concerns)
-    3. **External Pressure Analysis** (regulatory/competitive factors)
-    4. **Organizational Readiness Analysis** (implementation feasibility)
-    5. **Key Recommendations** (3-5 specific actions)
-    6. **Risk Factors** (main concerns to address)
+    Based on the detailed category evaluations above, provide a final assessment covering:
     
-    Format your response in clear markdown with sections.
+    1. **Overall Viability Score** (1-100, weighted average of category scores)
+    2. **Executive Summary** (key findings and recommendation)
+    3. **Category Synopsis** (brief summary of each category's key points)
+    4. **Implementation Priority** (High/Medium/Low with rationale)
+    5. **Key Success Factors** (3-5 critical elements for success)
+    6. **Major Risk Factors** (3-5 main concerns to address)
+    7. **Next Steps** (specific recommended actions)
+    
+    Format your response in clear markdown with sections and use the insights from the detailed category evaluations.
     """
     
     try:
@@ -308,7 +430,7 @@ def perform_final_evaluation():
         st.session_state.evaluation_complete = True
         return response.content
     except Exception as e:
-        return f"Unable to complete evaluation: {str(e)}"
+        return f"Unable to complete final evaluation: {str(e)}"
 
 
 # Display chat messages
