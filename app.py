@@ -1,90 +1,64 @@
 import streamlit as st
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.memory import ConversationBufferMemory
-from langchain_ollama import OllamaEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain import hub
-from langgraph.prebuilt import create_react_agent
-from langgraph_supervisor import create_supervisor
-from langchain.callbacks import StreamingStdOutCallbackHandler
 from langchain_core.messages import convert_to_messages, HumanMessage, AIMessage
-from langgraph.types import interrupt
 from qdrant_client import QdrantClient
 from langchain_core.retrievers import BaseRetriever
-from dotenv import load_dotenv
 import os
-from langchain_openai import ChatOpenAI  # Changed from langchain_ollama
-from langchain_openai import OpenAIEmbeddings
+import json
+from dotenv import load_dotenv
 
+# Load environment variables from .env file
 load_dotenv()
-env = os.environ
 
 # Page configuration
-st.set_page_config(page_title="AI Usecase Evaluation", layout="centered")
+st.set_page_config(page_title="AI Usecase Evaluation in Finance", layout="centered")
 
 col1, col2 = st.columns([1, 4])
 with col1:
     st.image("assets/logo.png", width=100)  # Adjust path and width as needed
 with col2:
-    st.title("AI Usecase Evaluation")
+    st.title("AI Use Case Evaluation in Finance")
 
 # Initialize session state
 st.session_state.setdefault("messages", [])
-st.session_state.setdefault("memory", ConversationBufferMemory(
-    memory_key="history",
-    input_key="input",
-    output_key="output",
-    return_messages=True
-))
-st.session_state.setdefault("waiting_for_human_input", False)
-st.session_state.setdefault("current_query", "")
-st.session_state.setdefault("agent_conversation", [])
+st.session_state.setdefault("current_category", 0)  # 0=initial, 1=benefits, 2=pressure, 3=readiness, 4=complete ; mapping in CATEGORY_NAMES
+st.session_state.setdefault("category_info", {
+    "perceived_benefits": "",
+    "external_pressure": "",
+    "organizational_readiness": ""
+})
+st.session_state.setdefault("use_case_overview", "")
+st.session_state.setdefault("evaluation_complete", False)
+st.session_state.setdefault("category_evaluations", {})
+
+CATEGORY_NAMES = {
+    1: "perceived_benefits",
+    2: "external_pressure", 
+    3: "organizational_readiness"
+}
 
 # LLM and embeddings setup
-# llm = ChatOllama(model="llama3.2:latest", streaming=True)
-embeddings = OllamaEmbeddings(model="llama3.2:latest")
-
-model_access_key = env.get("MODEL_ACCESS_KEY")
-if not model_access_key:
-    raise ValueError("MODEL_ACCESS_KEY not found in environment variables")
-
-# Replace Ollama with Digital Ocean Serverless Inference
 llm = ChatOpenAI(
-    model="llama3.3-70b-instruct",
-    openai_api_key=model_access_key,
-    openai_api_base="https://inference.do-ai.run/v1",
-    streaming=True
+    model="gpt-4o-mini",
+    streaming=True,
+    temperature=0.1
 )
-
-# # Replace Ollama embeddings with Digital Ocean embeddings
-# embeddings = OpenAIEmbeddings(
-#     model="llama3.3-70b-instruct",  # Use the appropriate embedding model name
-#     openai_api_key=model_access_key,
-#     openai_api_base="https://inference.do-ai.run/v1"
-# )
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
 # Connect to local Qdrant instance for knowledge base
-# Get API key from environment
-qdrant_api_key = env.get("QDRANT_API_KEY")
-if not qdrant_api_key:
-    raise ValueError("QDRANT_API_KEY not found in environment variables")
-qdrant_url = env.get("QDRANT_URL")
-if not qdrant_url:
-    raise ValueError("QDRANT_URL not found in environment variables")
-
-
 qdrant_client = QdrantClient(
-    url=qdrant_url, 
-    api_key=qdrant_api_key,
-    check_compatibility=False,  # Skip compatibility check
-    timeout=60  # Increase timeout
+    url=os.getenv("QDRANT_URL"),
+    api_key=os.getenv("QDRANT_API_KEY")
 )
 vector_store = QdrantVectorStore(
     client=qdrant_client,
-    collection_name="banking_ai_usecases",
-    embedding=embeddings,
+    collection_name="banking_ai_usecases_small",
+    embedding=embeddings
 )
 retriever = vector_store.as_retriever(search_kwargs={"k": 5})
 
@@ -109,189 +83,471 @@ def get_relevant_examples(query: str) -> str:
         return response
     except Exception as e:
         return f"Unable to retrieve examples: {str(e)}"
-
-# Function to collect human input when an agent requests it
-def human_assistance(query: str) -> str:
-    """Request assistance from a human."""
-    st.session_state.waiting_for_human_input = True
-    st.session_state.current_query = query
     
-    # First try to get information from our knowledge base
-    kb_response = get_relevant_examples(query)
+# ORCHESTRATOR FUNCTION
+def process_user_input(user_input):
+    """Simple router based on current_category"""
+    current_cat = st.session_state.current_category
     
-    # Return knowledge base response or default if not useful
-    if kb_response and len(kb_response) > 20:
-        return f"Based on our knowledge base: {kb_response}"
-    return "The information is not available at this moment. Please continue with what you know."
-
-# Tool to access the RAG system for the agents
-def search_knowledge_base(query: str) -> str:
-    """Search the knowledge base for relevant AI use case examples in finance."""
-    examples = get_relevant_examples(query)
-    return f"Knowledge base examples: {examples}"
-
-# Create the agents with access to both human assistance and knowledge base
-perceived_benefits_agent = create_react_agent(
-    model=llm,
-    tools=[human_assistance, search_knowledge_base],
-    prompt=(
-        "You are a perceived benefits agent for evaluating AI usecases in finance.\n\n"
-        "INSTRUCTIONS:\n"
-        "- Assist ONLY with evaluating AI usecases in terms of perceived benefits\n"
-        "- Focus on potential ROI, efficiency gains, accuracy improvements, and competitive advantages\n"
-        "- Use the search_knowledge_base tool to find relevant examples before asking for human help\n"
-        "- After you're done with your tasks, respond to the supervisor directly\n"
-        "- Respond ONLY with the results of your work, do NOT include ANY other text."
-    ),
-    name="perceived_benefits_agent",
-)
-
-external_pressure_agent = create_react_agent(
-    model=llm,
-    tools=[human_assistance, search_knowledge_base],
-    prompt=(
-        "You are an external pressure agent for evaluating AI usecases in finance.\n\n"
-        "INSTRUCTIONS:\n"
-        "- Assist ONLY with evaluating AI usecases in terms of external pressure\n"
-        "- Focus on regulatory requirements, competitor actions, customer expectations, and market trends\n"
-        "- Use the search_knowledge_base tool to find relevant examples before asking for human help\n"
-        "- After you're done with your tasks, respond to the supervisor directly\n"
-        "- Respond ONLY with the results of your work, do NOT include ANY other text."
-    ),
-    name="external_pressure_agent",
-)
-
-organizational_readiness_agent = create_react_agent(
-    model=llm,
-    tools=[human_assistance, search_knowledge_base],
-    prompt=(
-        "You are an organizational readiness agent for evaluating AI usecases in finance.\n\n"
-        "INSTRUCTIONS:\n"
-        "- Assist ONLY with evaluating AI usecases in terms of organizational readiness\n"
-        "- Focus on technical capabilities, data quality, staff skills, governance frameworks, and implementation feasibility\n"
-        "- Use the search_knowledge_base tool to find relevant examples before asking for human help\n"
-        "- After you're done with your tasks, respond to the supervisor directly\n"
-        "- Respond ONLY with the results of your work, do NOT include ANY other text."
-    ),
-    name="organizational_readiness_agent",
-)
-
-# Create the supervisor with access to the knowledge base
-supervisor = create_supervisor(
-    model=llm,
-    agents=[perceived_benefits_agent, external_pressure_agent, organizational_readiness_agent],
-    tools=[search_knowledge_base],
-    prompt=(
-        "You are a supervisor managing three agents for evaluating AI use cases in finance:\n"
-        "- perceived_benefits_agent: Assign tasks to this agent regarding perceived benefits of AI use cases.\n"
-        "- external_pressure_agent: Assign tasks to this agent regarding external pressures on AI use cases.\n"
-        "- organizational_readiness_agent: Assign tasks to this agent regarding organizational readiness for AI use cases.\n\n"
-        "Before assigning tasks, use the search_knowledge_base tool to gather relevant examples.\n"
-        "Assign work to one agent at a time, do not call agents in parallel.\n"
-        "Do not do any work yourself.\n"
-        "When responding to the user, synthesize all findings from the agents into a comprehensive assessment."
-    ),
-    add_handoff_back_messages=True,
-    output_mode="full_history",
-).compile()
-
-# Function to collect agent responses
-class ConversationCollector(StreamingStdOutCallbackHandler):
-    def __init__(self):
-        super().__init__()
-        self.conversation = []
+    if current_cat == 0:
+        # Store overview, move to 1
+        st.session_state.use_case_overview = user_input
+        st.session_state.current_category = 1
+        return ask_for_category_info("perceived_benefits")
     
-    def on_llm_new_token(self, token: str, **kwargs):
-        self.conversation.append(token)
+    elif current_cat == 1:
+        return process_perceived_benefits_input(user_input)
+    
+    elif current_cat == 2:
+        return process_external_pressure_input(user_input)
+    
+    elif current_cat == 3:
+        return process_organizational_readiness_input(user_input)
+    
+    elif current_cat == 4:
+        # Perform final evaluation
+        return perform_final_evaluation()
+    
+    else:
+        return "Evaluation already completed. Start a new conversation for a fresh evaluation."
+
+# gets called to return json generated in sufficiency checker 
+def call_llm_and_parse_json(prompt):
+    """Call LLM with prompt and parse JSON response"""
+    try:
+        response = llm.invoke(prompt)
+        content = response.content
         
-    def get_conversation(self):
-        return "".join(self.conversation)
+        # Extract JSON from response
+        if "```json" in content:
+            json_str = content.split("```json")[1].split("```")[0]
+        elif "{" in content and "}" in content:
+            start = content.find("{")
+            end = content.rfind("}") + 1
+            json_str = content[start:end]
+        else:
+            json_str = content
+            
+        return json.loads(json_str)
+    except Exception as e:
+        # Fallback if parsing fails
+        return {
+            "is_sufficient": True,  # Proceed anyway
+            "missing_aspects": [],
+            "follow_up_question": ""
+        }
+    
 
-# Display chat history
-for m in st.session_state.messages:
-    st.chat_message(m["role"]).markdown(m["content"])
 
-# Display human assistance prompt if needed
-if st.session_state.waiting_for_human_input:
-    with st.container():
-        st.info(f"Agent needs information: {st.session_state.current_query}")
-        human_response = st.text_input("Your response to the agent:", key="human_assist_input")
-        if st.button("Submit Response"):
-            st.session_state.waiting_for_human_input = False
-            # In a real implementation, we'd need to feed this back to the agent
-            # This is a placeholder for now
+def ask_for_category_info(category_name):
+    """Generate initial question for specific category"""
+    questions = {
+        "perceived_benefits": "📈 **Now let's explore the Perceived Benefits of your AI use case.**\n\nPlease tell me about expected cost savings, revenue impact, customer experience improvements, and strategic alignment.",
+        
+        "external_pressure": "🔍 **Let's discuss External Pressure factors.**\n\nPlease provide information about regulatory requirements, competitive pressure, customer demands, and risk management considerations.",
+        
+        "organizational_readiness": "🏢 **Finally, let's assess your Organizational Readiness.**\n\nPlease share details about data quality, team skills, IT infrastructure, and change management readiness."
+    }
+    return questions.get(category_name, "Please provide more information.")
 
-# Handle new user input
-if prompt := st.chat_input("Ask about AI use cases in finance..."):
+
+def evaluate_perceived_benefits(collected_info):
+    """Evaluate the perceived benefits category and return structured assessment with score"""
+    
+    # Get relevant examples for context
+    kb_examples = get_relevant_examples(f"perceived benefits AI use case finance {collected_info}")
+    
+    evaluation_prompt = f"""
+    You are evaluating the PERCEIVED BENEFITS of an AI use case in finance.
+    
+    EVALUATION CRITERIA FROM FRAMEWORK:
+    A use case is considered highly attractive when it generates clear and measurable value for the financial institution. 
+    This includes significant cost reductions and efficiency gains from AI-powered automation, particularly in processes like fraud detection, 
+    compliance, and back-office operations. AI use cases that drive revenue growth through personalized products, innovative financial 
+    services, and enhanced customer targeting offer substantial business potential. Improving customer experience through personalization 
+    and real-time interactions contributes to higher customer retention. The ability of AI systems to reduce risks by improving process 
+    reliability and minimizing human error is a crucial benefit.
+
+    Low attractiveness factors include use cases with low/unclear business value, high implementation complexity without clear ROI, 
+    and overestimated expected benefits relative to the organization's capabilities.
+    
+    RELEVANT EXAMPLES FROM KNOWLEDGE BASE:
+    {kb_examples}
+    
+    COLLECTED INFORMATION:
+    {collected_info}
+    
+    Provide a structured evaluation of perceived benefits covering:
+    1. **Cost Reduction Analysis** (quantify savings potential)
+    2. **Revenue Impact Assessment** (growth opportunities)
+    3. **Customer Experience Improvements** (service enhancements)
+    4. **Strategic Alignment** (business goal alignment)
+    5. **Competitive Advantage** (market positioning)
+    6. **Benefits Score** (1-100 based on strength of benefits)
+
+    For the Benefits Score (1-100):
+    - 80-100: Exceptional, clear quantifiable benefits with strong evidence
+    - 60-79: Strong benefits with good evidence but some uncertainties
+    - 40-59: Moderate benefits with some supporting evidence
+    - 20-39: Limited benefits or insufficient evidence
+    - 1-19: Minimal benefits, major concerns about value
+    
+    If relevant examples were found in the knowledge base, reference them in your evaluation.
+    Return your analysis in clear markdown format. Make sure to include the numerical score.
+    """
+    
+    try:
+        response = llm.invoke(evaluation_prompt)
+        return response.content
+    except Exception as e:
+        return f"Unable to evaluate perceived benefits: {str(e)}"
+
+
+def evaluate_external_pressure(collected_info):
+    """Evaluate the external pressure category and return structured assessment with score"""
+    
+    # Get relevant examples for context
+    kb_examples = get_relevant_examples(f"external pressure regulatory compliance AI finance {collected_info}")
+    
+    evaluation_prompt = f"""
+    You are evaluating the EXTERNAL PRESSURE factors of an AI use case in finance.
+    
+    EVALUATION CRITERIA FROM FRAMEWORK:
+    In the financial sector, regulatory and compliance requirements play a crucial role in determining AI use cases. 
+    A favorable use case fully complies with existing regulations such as the EU AI Act, governing fairness, transparency, 
+    accountability and risk management. High levels of model explainability, transparency and fairness are essential to ensure 
+    AI systems can be audited and understood by regulators and stakeholders. Competitor adoption of similar AI use cases can validate 
+    relevance and practicality. Observing peer institutions implementing specific use cases provides assurance about regulatory 
+    viability and business value.
+
+    Use cases with non-transparent models lacking explainability face significant regulatory obstacles. Non-compliance with legal 
+    standards can expose the institution to legal sanctions and reputational damage. Insufficient attention to data privacy, 
+    cybersecurity risks and bias mitigation may result in vulnerabilities and undermine trust.
+    
+    RELEVANT EXAMPLES FROM KNOWLEDGE BASE:
+    {kb_examples}
+    
+    COLLECTED INFORMATION:
+    {collected_info}
+    
+    Provide a structured evaluation of external pressures covering:
+    1. **Regulatory Compliance** (mandatory requirements)
+    2. **Model Explainability** (transparency capabilities)
+    3. **Competitive Pressure** (market forces)
+    4. **Data Privacy & Security** (protection measures)
+    5. **Risk Assessment** (mitigation strategies)
+    6. **Pressure Score** (1-100 based on urgency and impact)
+    
+    For the Pressure Score (1-100):
+    - 80-100: High external pressure with clear regulatory drivers or significant competitive threats
+    - 60-79: Substantial pressure with defined regulatory requirements
+    - 40-59: Moderate pressure with some external drivers
+    - 20-39: Limited pressure or unclear external requirements
+    - 1-19: Minimal external pressure driving the use case
+    
+    If relevant examples were found in the knowledge base, reference them in your evaluation.
+    Return your analysis in clear markdown format. Make sure to include the numerical score.
+    """
+    
+    try:
+        response = llm.invoke(evaluation_prompt)
+        return response.content
+    except Exception as e:
+        return f"Unable to evaluate external pressure: {str(e)}"
+
+
+def evaluate_organizational_readiness(collected_info):
+    """Evaluate the organizational readiness category and return structured assessment with score"""
+    
+    # Get relevant examples for context
+    kb_examples = get_relevant_examples(f"organizational readiness AI implementation finance {collected_info}")
+    
+    evaluation_prompt = f"""
+    You are evaluating the ORGANIZATIONAL READINESS for an AI use case in finance.
+    
+    EVALUATION CRITERIA FROM FRAMEWORK:
+    A key factor for successful AI adoption is the organization's internal readiness. High data quality, comprehensive data availability 
+    and mature data pipelines ensure AI models are trained on reliable and representative data sources. The presence of a workforce 
+    with dedicated AI expertise - combined with openness toward innovation and clearly defined AI governance structures - plays a critical role. 
+    These enable cross-functional collaboration, facilitate compliance with regulatory demands and ensure responsible AI development and deployment. 
+    Strategic alignment of AI use cases with core business priorities, supported by strong executive sponsorship, ensures sustainability of AI initiatives.
+
+    Limited data availability, fragmented sources and poor data quality significantly hinder model development and performance. 
+    Insufficient AI skills, resistance to change, and lack of training among staff can delay or prevent successful AI adoption. 
+    Legacy IT systems, fragmented infrastructures, and weak system integration exacerbate implementation challenges.
+    
+    RELEVANT EXAMPLES FROM KNOWLEDGE BASE:
+    {kb_examples}
+    
+    COLLECTED INFORMATION:
+    {collected_info}
+    
+    Provide a structured evaluation of organizational readiness covering:
+    1. **Data Quality & Availability** (data infrastructure)
+    2. **Team Skills & Expertise** (human resources)
+    3. **IT Infrastructure** (technical capabilities)
+    4. **Change Management** (adoption readiness)
+    5. **Executive Support** (leadership commitment)
+    6. **Readiness Score** (1-100 based on implementation feasibility)
+    
+    For the Readiness Score (1-100):
+    - 80-100: Fully prepared with high-quality data, skilled teams, and robust infrastructure
+    - 60-79: Well-positioned with good readiness in most key areas
+    - 40-59: Moderately prepared with some gaps to address
+    - 20-39: Significant readiness concerns in multiple areas
+    - 1-19: Severely unprepared for implementation
+    
+    If relevant examples were found in the knowledge base, reference them in your evaluation.
+    Return your analysis in clear markdown format. Make sure to include the numerical score.
+    """
+    
+    try:
+        response = llm.invoke(evaluation_prompt)
+        return response.content
+    except Exception as e:
+        return f"Unable to evaluate organizational readiness: {str(e)}"
+
+
+
+def process_perceived_benefits_input(user_input):
+    """Process input for perceived benefits category"""
+    st.session_state.category_info["perceived_benefits"] += f" {user_input}"
+    
+    sufficiency = check_perceived_benefits_sufficiency(
+        st.session_state.category_info["perceived_benefits"]
+    )
+    
+    if sufficiency["is_sufficient"]:
+        # Evaluate this category and store the result
+        evaluation = evaluate_perceived_benefits(st.session_state.category_info["perceived_benefits"])
+        st.session_state.category_evaluations["perceived_benefits"] = evaluation
+        
+        st.session_state.current_category = 2
+        return ask_for_category_info("external_pressure")
+    else:
+        missing = ', '.join(sufficiency['missing_aspects'])
+        return f"I need more information about **Perceived Benefits**.\n\n**Missing:** {missing}\n\n{sufficiency['follow_up_question']}"
+
+def process_external_pressure_input(user_input):
+    """Process input for external pressure category"""
+    st.session_state.category_info["external_pressure"] += f" {user_input}"
+    
+    sufficiency = check_external_pressure_sufficiency(
+        st.session_state.category_info["external_pressure"]
+    )
+    
+    if sufficiency["is_sufficient"]:
+        # Evaluate this category and store the result
+        evaluation = evaluate_external_pressure(st.session_state.category_info["external_pressure"])
+        st.session_state.category_evaluations["external_pressure"] = evaluation
+        
+        st.session_state.current_category = 3
+        return ask_for_category_info("organizational_readiness")
+    else:
+        missing = ', '.join(sufficiency['missing_aspects'])
+        return f"I need more information about **External Pressure**.\n\n**Missing:** {missing}\n\n{sufficiency['follow_up_question']}"
+
+def process_organizational_readiness_input(user_input):
+    """Process input for organizational readiness category"""
+    st.session_state.category_info["organizational_readiness"] += f" {user_input}"
+    
+    sufficiency = check_organizational_readiness_sufficiency(
+        st.session_state.category_info["organizational_readiness"]
+    )
+    
+    if sufficiency["is_sufficient"]:
+        # Evaluate this category and store the result
+        evaluation = evaluate_organizational_readiness(st.session_state.category_info["organizational_readiness"])
+        st.session_state.category_evaluations["organizational_readiness"] = evaluation
+        
+        st.session_state.current_category = 4
+        return perform_final_evaluation()
+    else:
+        missing = ', '.join(sufficiency['missing_aspects'])
+        return f"I need more information about **Organizational Readiness**.\n\n**Missing:** {missing}\n\n{sufficiency['follow_up_question']}"
+
+# TODO: Define required information for each category
+def check_perceived_benefits_sufficiency(collected_info):
+    required_information = """
+    REQUIRED INFORMATION FOR PERCEIVED BENEFITS:
+    Based on the evaluation criteria, we need information about:
+    - Cost reduction and efficiency gains (required)
+    - Revenue growth potential (required)
+    - Customer experience improvements (optional but preferred)
+    - Risk reduction capabilities (optional)
+    - Strategic alignment with business goals (required)
+    """
+    
+    prompt = f"""
+    You are evaluating ONLY the perceived benefits of an AI use case in finance.
+    Focus specifically on the following requirements:
+
+    {required_information}
+    
+    Information provided: {collected_info}
+    
+    Be somewhat lenient in your evaluation to avoid frustrating the user with too many follow-up questions.
+    If you have information on at least 3 of the 5 areas, consider it sufficient.
+    
+    Return JSON: {{"is_sufficient": true/false, "missing_aspects": [...], "follow_up_question": "..."}}
+    """
+
+    return call_llm_and_parse_json(prompt)
+
+
+def check_external_pressure_sufficiency(collected_info):
+    required_information = """
+    REQUIRED INFORMATION FOR EXTERNAL PRESSURE:
+    Based on the evaluation criteria, we need information about:
+    - Regulatory compliance requirements (required)
+    - Model explainability and transparency (required)
+    - Competitive landscape and peer adoption (optional but preferred)
+    - Data privacy and security considerations (optional)
+    - Potential risks of non-compliance (optional)
+    """
+    
+    prompt = f"""
+    You are evaluating ONLY the external pressure factors of an AI use case in finance.
+    Focus specifically on the following requirements:
+
+    {required_information}
+    
+    Information provided: {collected_info}
+    
+    Be somewhat lenient in your evaluation to avoid frustrating the user with too many follow-up questions.
+    If you have information on at least 2 of the 5 areas including the required ones, consider it sufficient.
+    
+    Return JSON: {{"is_sufficient": true/false, "missing_aspects": [...], "follow_up_question": "..."}}
+    """
+    
+    return call_llm_and_parse_json(prompt)
+
+
+def check_organizational_readiness_sufficiency(collected_info):
+    required_information = """
+    REQUIRED INFORMATION FOR ORGANIZATIONAL READINESS:
+    Based on the evaluation criteria, we need information about:
+    - Data quality and availability (required)
+    - AI expertise and skill level within the organization (required)
+    - IT infrastructure and system integration (required)
+    - Executive sponsorship and strategic alignment (optional)
+    - Change management readiness (optional)
+    """
+    
+    prompt = f"""
+    You are evaluating ONLY the organizational readiness of an AI use case.
+    Focus specifically on the following requirements:
+
+    {required_information}
+    
+    Information provided: {collected_info}
+    
+    Be somewhat lenient in your evaluation to avoid frustrating the user with too many follow-up questions.
+    If you have information on at least 3 of the 5 areas including data quality, consider it sufficient.
+    
+    Return JSON: {{"is_sufficient": true/false, "missing_aspects": [...], "follow_up_question": "..."}}
+    """
+    
+    return call_llm_and_parse_json(prompt)
+
+def perform_final_evaluation():
+    """Perform the final evaluation using all category evaluations"""
+    
+    # Get all category evaluations
+    category_evaluations = st.session_state.get("category_evaluations", {})
+    
+    # Collect all information for context
+    full_context = f"""
+    Use Case Overview: {st.session_state.use_case_overview}
+    
+    CATEGORY EVALUATIONS:
+    
+    Perceived Benefits Evaluation:
+    {category_evaluations.get('perceived_benefits', 'Not evaluated')}
+    
+    External Pressure Evaluation:
+    {category_evaluations.get('external_pressure', 'Not evaluated')}
+    
+    Organizational Readiness Evaluation:
+    {category_evaluations.get('organizational_readiness', 'Not evaluated')}
+    """
+    
+    # Get relevant examples from knowledge base
+    kb_examples = get_relevant_examples(st.session_state.use_case_overview)
+
+    # Create final evaluation prompt
+    evaluation_prompt = f"""
+    You are an AI expert providing a FINAL COMPREHENSIVE evaluation of an AI use case in finance.
+    
+    OVERALL EVALUATION FRAMEWORK:
+    This evaluation is based on three key dimensions:
+    1. Perceived Benefits: Value generation, cost reduction, revenue growth, customer experience, risk reduction
+    2. External Pressure: Regulatory compliance, model transparency, competitive forces, data privacy
+    3. Organizational Readiness: Data quality, AI expertise, IT infrastructure, change management readiness
+    
+    RELEVANT EXAMPLES FROM KNOWLEDGE BASE:
+    {kb_examples}
+    
+    DETAILED ANALYSIS FROM CATEGORIES:
+    {full_context}
+    
+    Based on the detailed category evaluations above, provide a final assessment covering:
+    
+    1. **Overall Viability Score** (1-100, calculated as weighted average of category scores)
+    2. **Executive Summary** (key findings and clear recommendation)
+    3. **Category Synopsis** (brief summary of each category's key points with their scores)
+    4. **Implementation Priority** (High/Medium/Low with rationale)
+    5. **Key Success Factors** (3-5 critical elements for success)
+    6. **Major Risk Factors** (3-5 main concerns to address)
+    7. **Next Steps** (specific recommended actions)
+    
+    For the Overall Viability Score, extract the numerical scores from each category evaluation and calculate the weighted average:
+    - Perceived Benefits: 30% weight
+    - External Pressure: 35% weight
+    - Organizational Readiness: 35% weight
+    
+    If relevant examples were found in the knowledge base, reference them in your evaluation.
+    Format your response in clear markdown with sections and use the insights from the detailed category evaluations.
+    """
+    
+    try:
+        response = llm.invoke(evaluation_prompt)
+        st.session_state.evaluation_complete = True
+        return response.content
+    except Exception as e:
+        return f"Unable to complete final evaluation: {str(e)}"
+
+
+# Display chat messages
+for message in st.session_state.messages:
+    st.chat_message(message["role"]).markdown(message["content"])
+
+# Chat input
+if prompt := st.chat_input("Tell me about your AI use case..."):
     # Display user message
     st.chat_message("user").markdown(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
     
-    # Process with the agent system
+    # Process with category-based workflow
     with st.chat_message("assistant"):
-        collector = ConversationCollector()
-        callbacks = [collector]
-        
-        # First get relevant information from the knowledge base
-        with st.spinner("Retrieving relevant examples..."):
-            kb_examples = get_relevant_examples(prompt)
-            
-        with st.spinner("Agents are evaluating your use case..."):
-            # Run the supervisor without callbacks parameter
-            for chunk in supervisor.stream(
-                {
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": f"Relevant examples from the knowledge base: {kb_examples}"
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt,
-                        }
-                    ]
-                }
-            ):
-                # This would update the conversation in real-time if supported
-                pass
-            
-            # Extract the final response from the supervisor
-            if "supervisor" in chunk:
-                messages = chunk["supervisor"]["messages"]
-                # Get the last assistant message
-                response = "No response generated"
-                for msg in reversed(messages):
-                    # Use proper attribute access for Message objects
-                    if hasattr(msg, 'type') and msg.type == 'ai':
-                        response = msg.content
-                        break
-                    # For dictionary messages
-                    elif isinstance(msg, dict) and msg.get("role") == "assistant":
-                        response = msg.get("content", "No response generated")
-                        break
-            else:
-                response = "The agents couldn't process your request."
-            
-            # Display the response
-            st.markdown(response)
-            
-            # Save to history
-            st.session_state.messages.append({"role": "assistant", "content": response})
-            st.session_state.memory.save_context({"input": prompt}, {"output": response})
+        response = process_user_input(prompt)
+        st.markdown(response)
+        st.session_state.messages.append({"role": "assistant", "content": response})
+
 
 # Add a section to explain how the app works
 with st.expander("How this works"):
     st.markdown("""
-    This AI use case evaluation system combines retrieval-augmented generation (RAG) with a multi-agent architecture:
+    This AI use case evaluation system uses a category-by-category approach:
     
-    1. **Knowledge Base**: The system first searches a curated database of AI use cases in finance to find relevant examples.
+    1. **Step-by-Step Evaluation**:
+       - **Perceived Benefits**: Evaluates expected advantages and ROI
+       - **External Pressure**: Assesses regulatory and competitive factors  
+       - **Organizational Readiness**: Analyzes implementation capabilities
+
+    2. **Information Gathering**: The system asks follow-up questions until sufficient information is collected for each category.
+
+    3. **Knowledge Base**: Searches a curated database of AI use cases in finance for relevant examples.
     
-    2. **Specialized Agents**:
-       - **Perceived Benefits Agent**: Evaluates potential advantages of implementing AI solutions
-       - **External Pressure Agent**: Assesses market forces, regulations, and competitive factors
-       - **Organizational Readiness Agent**: Analyzes your organization's capability to implement AI
-    
-    3. **Supervisor**: Coordinates the agents and synthesizes their findings into a comprehensive assessment.
-    
-    This approach ensures you get a thorough evaluation based on both established examples and expert analysis.
+    This ensures thorough evaluation based on established examples and systematic analysis.
     """)

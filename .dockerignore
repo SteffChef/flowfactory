@@ -1,0 +1,9 @@
+// filepath: /home/steffen/uni/flowfactory/.dockerignore
+.env
+.git
+.gitignore
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.streamlit/secrets.toml
