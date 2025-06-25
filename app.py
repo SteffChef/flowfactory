@@ -16,8 +16,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Page configuration
-st.set_page_config(page_title="AI Usecase Evaluation", layout="centered")
-st.title("AI Usecase Evaluation in Finance")
+st.set_page_config(page_title="AI Usecase Evaluation in Finance", layout="centered")
+
+col1, col2 = st.columns([1, 4])
+with col1:
+    st.image("assets/logo.png", width=100)  # Adjust path and width as needed
+with col2:
+    st.title("AI Use Case Evaluation in Finance")
 
 # Initialize session state
 st.session_state.setdefault("messages", [])
@@ -147,7 +152,7 @@ def ask_for_category_info(category_name):
 
 
 def evaluate_perceived_benefits(collected_info):
-    """Evaluate the perceived benefits category and return structured assessment"""
+    """Evaluate the perceived benefits category and return structured assessment with score"""
     
     # Get relevant examples for context
     kb_examples = get_relevant_examples(f"perceived benefits AI use case finance {collected_info}")
@@ -155,7 +160,18 @@ def evaluate_perceived_benefits(collected_info):
     evaluation_prompt = f"""
     You are evaluating the PERCEIVED BENEFITS of an AI use case in finance.
     
-    CONTEXT AND EXAMPLES:
+    EVALUATION CRITERIA FROM FRAMEWORK:
+    A use case is considered highly attractive when it generates clear and measurable value for the financial institution. 
+    This includes significant cost reductions and efficiency gains from AI-powered automation, particularly in processes like fraud detection, 
+    compliance, and back-office operations. AI use cases that drive revenue growth through personalized products, innovative financial 
+    services, and enhanced customer targeting offer substantial business potential. Improving customer experience through personalization 
+    and real-time interactions contributes to higher customer retention. The ability of AI systems to reduce risks by improving process 
+    reliability and minimizing human error is a crucial benefit.
+
+    Low attractiveness factors include use cases with low/unclear business value, high implementation complexity without clear ROI, 
+    and overestimated expected benefits relative to the organization's capabilities.
+    
+    RELEVANT EXAMPLES FROM KNOWLEDGE BASE:
     {kb_examples}
     
     COLLECTED INFORMATION:
@@ -168,8 +184,16 @@ def evaluate_perceived_benefits(collected_info):
     4. **Strategic Alignment** (business goal alignment)
     5. **Competitive Advantage** (market positioning)
     6. **Benefits Score** (1-100 based on strength of benefits)
+
+    For the Benefits Score (1-100):
+    - 80-100: Exceptional, clear quantifiable benefits with strong evidence
+    - 60-79: Strong benefits with good evidence but some uncertainties
+    - 40-59: Moderate benefits with some supporting evidence
+    - 20-39: Limited benefits or insufficient evidence
+    - 1-19: Minimal benefits, major concerns about value
     
-    Return your analysis in clear markdown format.
+    If relevant examples were found in the knowledge base, reference them in your evaluation.
+    Return your analysis in clear markdown format. Make sure to include the numerical score.
     """
     
     try:
@@ -180,7 +204,7 @@ def evaluate_perceived_benefits(collected_info):
 
 
 def evaluate_external_pressure(collected_info):
-    """Evaluate the external pressure category and return structured assessment"""
+    """Evaluate the external pressure category and return structured assessment with score"""
     
     # Get relevant examples for context
     kb_examples = get_relevant_examples(f"external pressure regulatory compliance AI finance {collected_info}")
@@ -188,7 +212,19 @@ def evaluate_external_pressure(collected_info):
     evaluation_prompt = f"""
     You are evaluating the EXTERNAL PRESSURE factors of an AI use case in finance.
     
-    CONTEXT AND EXAMPLES:
+    EVALUATION CRITERIA FROM FRAMEWORK:
+    In the financial sector, regulatory and compliance requirements play a crucial role in determining AI use cases. 
+    A favorable use case fully complies with existing regulations such as the EU AI Act, governing fairness, transparency, 
+    accountability and risk management. High levels of model explainability, transparency and fairness are essential to ensure 
+    AI systems can be audited and understood by regulators and stakeholders. Competitor adoption of similar AI use cases can validate 
+    relevance and practicality. Observing peer institutions implementing specific use cases provides assurance about regulatory 
+    viability and business value.
+
+    Use cases with non-transparent models lacking explainability face significant regulatory obstacles. Non-compliance with legal 
+    standards can expose the institution to legal sanctions and reputational damage. Insufficient attention to data privacy, 
+    cybersecurity risks and bias mitigation may result in vulnerabilities and undermine trust.
+    
+    RELEVANT EXAMPLES FROM KNOWLEDGE BASE:
     {kb_examples}
     
     COLLECTED INFORMATION:
@@ -196,13 +232,21 @@ def evaluate_external_pressure(collected_info):
     
     Provide a structured evaluation of external pressures covering:
     1. **Regulatory Compliance** (mandatory requirements)
-    2. **Competitive Pressure** (market forces)
-    3. **Customer Demands** (service expectations)
-    4. **Risk Management** (mitigation needs)
-    5. **Industry Standards** (best practices)
+    2. **Model Explainability** (transparency capabilities)
+    3. **Competitive Pressure** (market forces)
+    4. **Data Privacy & Security** (protection measures)
+    5. **Risk Assessment** (mitigation strategies)
     6. **Pressure Score** (1-100 based on urgency and impact)
     
-    Return your analysis in clear markdown format.
+    For the Pressure Score (1-100):
+    - 80-100: High external pressure with clear regulatory drivers or significant competitive threats
+    - 60-79: Substantial pressure with defined regulatory requirements
+    - 40-59: Moderate pressure with some external drivers
+    - 20-39: Limited pressure or unclear external requirements
+    - 1-19: Minimal external pressure driving the use case
+    
+    If relevant examples were found in the knowledge base, reference them in your evaluation.
+    Return your analysis in clear markdown format. Make sure to include the numerical score.
     """
     
     try:
@@ -213,7 +257,7 @@ def evaluate_external_pressure(collected_info):
 
 
 def evaluate_organizational_readiness(collected_info):
-    """Evaluate the organizational readiness category and return structured assessment"""
+    """Evaluate the organizational readiness category and return structured assessment with score"""
     
     # Get relevant examples for context
     kb_examples = get_relevant_examples(f"organizational readiness AI implementation finance {collected_info}")
@@ -221,7 +265,18 @@ def evaluate_organizational_readiness(collected_info):
     evaluation_prompt = f"""
     You are evaluating the ORGANIZATIONAL READINESS for an AI use case in finance.
     
-    CONTEXT AND EXAMPLES:
+    EVALUATION CRITERIA FROM FRAMEWORK:
+    A key factor for successful AI adoption is the organization's internal readiness. High data quality, comprehensive data availability 
+    and mature data pipelines ensure AI models are trained on reliable and representative data sources. The presence of a workforce 
+    with dedicated AI expertise - combined with openness toward innovation and clearly defined AI governance structures - plays a critical role. 
+    These enable cross-functional collaboration, facilitate compliance with regulatory demands and ensure responsible AI development and deployment. 
+    Strategic alignment of AI use cases with core business priorities, supported by strong executive sponsorship, ensures sustainability of AI initiatives.
+
+    Limited data availability, fragmented sources and poor data quality significantly hinder model development and performance. 
+    Insufficient AI skills, resistance to change, and lack of training among staff can delay or prevent successful AI adoption. 
+    Legacy IT systems, fragmented infrastructures, and weak system integration exacerbate implementation challenges.
+    
+    RELEVANT EXAMPLES FROM KNOWLEDGE BASE:
     {kb_examples}
     
     COLLECTED INFORMATION:
@@ -232,10 +287,18 @@ def evaluate_organizational_readiness(collected_info):
     2. **Team Skills & Expertise** (human resources)
     3. **IT Infrastructure** (technical capabilities)
     4. **Change Management** (adoption readiness)
-    5. **Budget & Resources** (financial commitment)
+    5. **Executive Support** (leadership commitment)
     6. **Readiness Score** (1-100 based on implementation feasibility)
     
-    Return your analysis in clear markdown format.
+    For the Readiness Score (1-100):
+    - 80-100: Fully prepared with high-quality data, skilled teams, and robust infrastructure
+    - 60-79: Well-positioned with good readiness in most key areas
+    - 40-59: Moderately prepared with some gaps to address
+    - 20-39: Significant readiness concerns in multiple areas
+    - 1-19: Severely unprepared for implementation
+    
+    If relevant examples were found in the knowledge base, reference them in your evaluation.
+    Return your analysis in clear markdown format. Make sure to include the numerical score.
     """
     
     try:
@@ -307,21 +370,24 @@ def process_organizational_readiness_input(user_input):
 def check_perceived_benefits_sufficiency(collected_info):
     required_information = """
     REQUIRED INFORMATION FOR PERCEIVED BENEFITS:
-    - Cost reduction percentage or amount (required)
-    - Revenue impact estimation (required)
-    - Customer experience metrics (optional but preferred)
+    Based on the evaluation criteria, we need information about:
+    - Cost reduction and efficiency gains (required)
+    - Revenue growth potential (required)
+    - Customer experience improvements (optional but preferred)
+    - Risk reduction capabilities (optional)
     - Strategic alignment with business goals (required)
-    - Competitive advantage description (optional)
     """
     
-    # specific prompting for this exact category
     prompt = f"""
-    You are evaluating ONLY the perceived benefits of an AI use case.
+    You are evaluating ONLY the perceived benefits of an AI use case in finance.
     Focus specifically on the following requirements:
 
     {required_information}
     
     Information provided: {collected_info}
+    
+    Be somewhat lenient in your evaluation to avoid frustrating the user with too many follow-up questions.
+    If you have information on at least 3 of the 5 areas, consider it sufficient.
     
     Return JSON: {{"is_sufficient": true/false, "missing_aspects": [...], "follow_up_question": "..."}}
     """
@@ -332,20 +398,24 @@ def check_perceived_benefits_sufficiency(collected_info):
 def check_external_pressure_sufficiency(collected_info):
     required_information = """
     REQUIRED INFORMATION FOR EXTERNAL PRESSURE:
-    - Regulatory or compliance requirements (required)
-    - Competitive market pressure (required)
-    - Customer demands and expectations (optional but preferred)
-    - Risk management considerations (required)
-    - Industry trends and standards (optional)
+    Based on the evaluation criteria, we need information about:
+    - Regulatory compliance requirements (required)
+    - Model explainability and transparency (required)
+    - Competitive landscape and peer adoption (optional but preferred)
+    - Data privacy and security considerations (optional)
+    - Potential risks of non-compliance (optional)
     """
     
     prompt = f"""
-    You are evaluating ONLY the external pressure factors of an AI use case.
+    You are evaluating ONLY the external pressure factors of an AI use case in finance.
     Focus specifically on the following requirements:
 
     {required_information}
     
     Information provided: {collected_info}
+    
+    Be somewhat lenient in your evaluation to avoid frustrating the user with too many follow-up questions.
+    If you have information on at least 2 of the 5 areas including the required ones, consider it sufficient.
     
     Return JSON: {{"is_sufficient": true/false, "missing_aspects": [...], "follow_up_question": "..."}}
     """
@@ -356,11 +426,12 @@ def check_external_pressure_sufficiency(collected_info):
 def check_organizational_readiness_sufficiency(collected_info):
     required_information = """
     REQUIRED INFORMATION FOR ORGANIZATIONAL READINESS:
+    Based on the evaluation criteria, we need information about:
     - Data quality and availability (required)
-    - Team skills and expertise (required)
-    - IT infrastructure capabilities (required)
-    - Change management readiness (optional but preferred)
-    - Budget and resource allocation (optional)
+    - AI expertise and skill level within the organization (required)
+    - IT infrastructure and system integration (required)
+    - Executive sponsorship and strategic alignment (optional)
+    - Change management readiness (optional)
     """
     
     prompt = f"""
@@ -371,12 +442,14 @@ def check_organizational_readiness_sufficiency(collected_info):
     
     Information provided: {collected_info}
     
+    Be somewhat lenient in your evaluation to avoid frustrating the user with too many follow-up questions.
+    If you have information on at least 3 of the 5 areas including data quality, consider it sufficient.
+    
     Return JSON: {{"is_sufficient": true/false, "missing_aspects": [...], "follow_up_question": "..."}}
     """
     
     return call_llm_and_parse_json(prompt)
 
-# TODO: evaluate each category when switching to the next and store it for final evaluation
 def perform_final_evaluation():
     """Perform the final evaluation using all category evaluations"""
     
@@ -406,7 +479,13 @@ def perform_final_evaluation():
     evaluation_prompt = f"""
     You are an AI expert providing a FINAL COMPREHENSIVE evaluation of an AI use case in finance.
     
-    CONTEXT AND EXAMPLES:
+    OVERALL EVALUATION FRAMEWORK:
+    This evaluation is based on three key dimensions:
+    1. Perceived Benefits: Value generation, cost reduction, revenue growth, customer experience, risk reduction
+    2. External Pressure: Regulatory compliance, model transparency, competitive forces, data privacy
+    3. Organizational Readiness: Data quality, AI expertise, IT infrastructure, change management readiness
+    
+    RELEVANT EXAMPLES FROM KNOWLEDGE BASE:
     {kb_examples}
     
     DETAILED ANALYSIS FROM CATEGORIES:
@@ -414,14 +493,20 @@ def perform_final_evaluation():
     
     Based on the detailed category evaluations above, provide a final assessment covering:
     
-    1. **Overall Viability Score** (1-100, weighted average of category scores)
-    2. **Executive Summary** (key findings and recommendation)
-    3. **Category Synopsis** (brief summary of each category's key points)
+    1. **Overall Viability Score** (1-100, calculated as weighted average of category scores)
+    2. **Executive Summary** (key findings and clear recommendation)
+    3. **Category Synopsis** (brief summary of each category's key points with their scores)
     4. **Implementation Priority** (High/Medium/Low with rationale)
     5. **Key Success Factors** (3-5 critical elements for success)
     6. **Major Risk Factors** (3-5 main concerns to address)
     7. **Next Steps** (specific recommended actions)
     
+    For the Overall Viability Score, extract the numerical scores from each category evaluation and calculate the weighted average:
+    - Perceived Benefits: 30% weight
+    - External Pressure: 35% weight
+    - Organizational Readiness: 35% weight
+    
+    If relevant examples were found in the knowledge base, reference them in your evaluation.
     Format your response in clear markdown with sections and use the insights from the detailed category evaluations.
     """
     
