@@ -366,7 +366,6 @@ def process_organizational_readiness_input(user_input):
         missing = ', '.join(sufficiency['missing_aspects'])
         return f"I need more information about **Organizational Readiness**.\n\n**Missing:** {missing}\n\n{sufficiency['follow_up_question']}"
 
-# TODO: Define required information for each category
 def check_perceived_benefits_sufficiency(collected_info):
     required_information = """
     REQUIRED INFORMATION FOR PERCEIVED BENEFITS:
